@@ -1,5 +1,5 @@
+barks: 113 
 dog: 40 109 
-forest: 72 131 
+forest: 72 
 the: 31 50 68 96 
-log: 127 
 fox: 16 54 

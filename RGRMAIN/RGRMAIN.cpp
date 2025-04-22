@@ -1,267 +1,233 @@
 ﻿#include <iostream>
 #include <fstream>
 #include <vector>
+#include <list>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <cctype>
 
 using namespace std;
 
-const int SIZE = 101;
+const int HASH_CAPACITY = 101;
 
 struct Entry {
-    string key;
-    vector<int> indices;
-    bool isDeleted;
-
-    Entry(const string& k, int index) : key(k), isDeleted(false) {
-        indices.push_back(index);
+    string keyword;
+    vector<int> locations;
+    Entry(const string& w, int pos) : keyword(w) {
+        locations.push_back(pos);
     }
 };
 
-vector<int> BoyerMooreMatch(const string& haystack, const string& needle) {
-    vector<int> foundPositions;
-    int textLength = haystack.size();
-    int patternLength = needle.size();
-
-    if (patternLength == 0 || patternLength > textLength)
-        return foundPositions;
-
-    unordered_map<char, int> badCharShift;
-    for (int i = 0; i < patternLength; ++i)
-        badCharShift[needle[i]] = i;
-
-    int shift = 0;
-
-    while (shift <= textLength - patternLength) {
-        int j = patternLength - 1;
-        while (j >= 0 && needle[j] == haystack[shift + j])
-            j--;
-
-        if (j < 0) {
-            foundPositions.push_back(shift);
-            shift += (shift + patternLength < textLength) ? patternLength - badCharShift[haystack[shift + patternLength]] : 1;
-        }
-        else {
-            int offset = j - (badCharShift.count(haystack[shift + j]) ? badCharShift[haystack[shift + j]] : -1);
-            shift += max(1, offset);
-        }
-    }
-
-    return foundPositions;
-}
-
-vector<pair<string, int>> extractWordsWithOffsets(const string& raw) {
-    vector<pair<string, int>> extracted;
-    int i = 0;
-    while (i < raw.length()) {
-        while (i < raw.length() && !isalpha(raw[i])) ++i;
-        int begin = i;
-        while (i < raw.length() && isalpha(raw[i])) ++i;
-        if (begin < i)
-            extracted.emplace_back(raw.substr(begin, i - begin), begin);
-    }
-    return extracted;
-}
-
-class TextIndexer {
+class WordIndexTable {
 private:
-    vector<Entry*> storage;
+    vector<list<Entry*>> buckets;
+    string fullText;
 
-    int computeHash(const string& word) {
-        unsigned int result = 0;
-        for (char ch : word)
-            result = 31 * result + ch;
-        return result % SIZE;
+    int computeHash(const string& key) {
+        unsigned int h = 0;
+        for (char ch : key)
+            h = h * 31 + ch;
+        return h % HASH_CAPACITY;
     }
 
-    bool isEqual(const string& a, const string& b) {
-        return !BoyerMooreMatch(a, b).empty() && a.length() == b.length();
+    vector<int> boyerMoore(const string& pattern) {
+        vector<int> foundPositions;
+        int n = fullText.size();
+        int m = pattern.size();
+
+        if (m == 0 || n < m) return foundPositions;
+
+        unordered_map<char, int> badChar;
+        for (int i = 0; i < m; ++i)
+            badChar[pattern[i]] = i;
+
+        int shift = 0;
+        while (shift <= n - m) {
+            int j = m - 1;
+            while (j >= 0 && tolower(pattern[j]) == tolower(fullText[shift + j]))
+                --j;
+
+            if (j < 0) {
+                if ((shift == 0 || !isalpha(fullText[shift - 1])) &&
+                    (shift + m == n || !isalpha(fullText[shift + m]))) {
+                    foundPositions.push_back(shift);
+                }
+                shift += (shift + m < n) ? m - badChar[fullText[shift + m]] : 1;
+            }
+            else {
+                char mismatch = fullText[shift + j];
+                int move = j - (badChar.count(mismatch) ? badChar[mismatch] : -1);
+                shift += max(1, move);
+            }
+        }
+        return foundPositions;
     }
 
 public:
-    TextIndexer() {
-        storage.resize(SIZE, nullptr);
+    WordIndexTable(const string& text) : fullText(text) {
+        buckets.resize(HASH_CAPACITY);
     }
 
-    ~TextIndexer() {
-        for (auto item : storage)
-            delete item;
-    }
-
-    void add(const string& word, int position) {
+    void insert(const string& word, int pos) {
         int index = computeHash(word);
-        int startIndex = index;
-
-        while (storage[index] != nullptr && !isEqual(storage[index]->key, word)) {
-            index = (index + 1) % SIZE;
-            if (index == startIndex) return;
+        for (Entry* e : buckets[index]) {
+            if (e->keyword == word) {
+                e->locations.push_back(pos);
+                return;
+            }
         }
-
-        if (storage[index] == nullptr || storage[index]->isDeleted) {
-            delete storage[index];
-            storage[index] = new Entry(word, position);
-        }
-        else {
-            storage[index]->indices.push_back(position);
-        }
+        buckets[index].push_back(new Entry(word, pos));
     }
 
     bool erase(const string& word) {
         int index = computeHash(word);
-        int startIndex = index;
-
-        while (storage[index] != nullptr) {
-            if (!storage[index]->isDeleted && isEqual(storage[index]->key, word)) {
-                storage[index]->isDeleted = true;
+        for (auto it = buckets[index].begin(); it != buckets[index].end(); ++it) {
+            if ((*it)->keyword == word) {
+                delete* it;
+                buckets[index].erase(it);
                 return true;
             }
-            index = (index + 1) % SIZE;
-            if (index == startIndex) break;
         }
-
         return false;
     }
 
-    vector<int> locate(const string& word) {
-        int index = computeHash(word);
-        int startIndex = index;
-
-        while (storage[index] != nullptr) {
-            if (!storage[index]->isDeleted && isEqual(storage[index]->key, word))
-                return storage[index]->indices;
-            index = (index + 1) % SIZE;
-            if (index == startIndex) break;
-        }
-
-        return {};
+    vector<int> searchBM(const string& word) {
+        return boyerMoore(word);
     }
 
-    void display() {
-        cout << "\n";
-        for (auto entry : storage) {
-            if (entry && !entry->isDeleted) {
-                cout << entry->key << ": ";
-                for (int i : entry->indices)
-                    cout << i << " ";
+    void showAll() {
+        for (const auto& bucket : buckets) {
+            for (Entry* e : bucket) {
+                cout << e->keyword << ": ";
+                for (int loc : e->locations)
+                    cout << loc << " ";
                 cout << endl;
             }
         }
     }
 
-    void saveToDisk(const string& filename) {
+    void save(const string& filename) {
         ofstream file(filename);
-        for (auto entry : storage) {
-            if (entry && !entry->isDeleted) {
-                file << entry->key << ": ";
-                for (int i : entry->indices)
-                    file << i << " ";
-                file << "\n";
+        for (const auto& bucket : buckets) {
+            for (Entry* e : bucket) {
+                file << e->keyword << ": ";
+                for (int loc : e->locations)
+                    file << loc << " ";
+                file << endl;
             }
         }
     }
+
+    ~WordIndexTable() {
+        for (auto& bucket : buckets)
+            for (Entry* e : bucket)
+                delete e;
+    }
 };
+
+vector<pair<string, int>> extractWordsWithPos(const string& text) {
+    vector<pair<string, int>> output;
+    int i = 0;
+    while (i < text.size()) {
+        while (i < text.size() && !isalpha(text[i])) ++i;
+        int start = i;
+        while (i < text.size() && isalpha(text[i])) ++i;
+        if (start < i) {
+            output.emplace_back(text.substr(start, i - start), start);
+        }
+    }
+    return output;
+}
 
 int main() {
     setlocale(LC_ALL, "");
+    ifstream textInput("text.txt");
+    ifstream keywordsInput("words.txt");
 
-    ifstream inputFile("text.txt");
-    ifstream dictFile("words.txt");
-
-    if (!inputFile || !dictFile) {
-        cout << "Ошибка открытия файлов.\n";
+    if (!textInput || !keywordsInput) {
+        cout << "Ошибка при открытии файлов.\n";
         return 1;
     }
 
-    string document((istreambuf_iterator<char>(inputFile)), istreambuf_iterator<char>());
-    vector<string> dictionary;
-    string current;
+    string content((istreambuf_iterator<char>(textInput)), istreambuf_iterator<char>());
+    vector<string> keywordList;
+    string word;
+    while (keywordsInput >> word) {
+        keywordList.push_back(word);
+    }
 
-    while (dictFile >> current)
-        dictionary.push_back(current);
+    WordIndexTable dictionary(content);
+    vector<pair<string, int>> tokens = extractWordsWithPos(content);
 
-    TextIndexer hashtable;
-    vector<pair<string, int>> parsedWords = extractWordsWithOffsets(document);
-
-    for (const string& word : dictionary) {
-        for (const auto& entry : parsedWords) {
-            if (entry.first == word)
-                hashtable.add(word, entry.second);
+    for (const auto& target : keywordList) {
+        for (const auto& token : tokens) {
+            if (token.first == target) {
+                dictionary.insert(target, token.second);
+            }
         }
     }
 
-    int action = -1;
-    string query;
-
+    int cmd;
     do {
         cout << "\n";
-        cout << "1. Поиск слова\n";
-        cout << "2. Добавить слово\n";
+        cout << "1. Поиск слова (Бойер-Мур)\n";
+        cout << "2. Добавить слово в текст\n";
         cout << "3. Удалить слово\n";
-        cout << "4. Показать индекс\n";
-        cout << "\nlog: ";
-        cin >> action;
+        cout << "4. Показать таблицу\n";
+        cout << "0. Выход\n";
+        cout << "log: ";
+        cin >> cmd;
 
-        switch (action) {
+        string input;
+        switch (cmd) {
         case 1:
             cout << "Введите слово: ";
-            cin >> query;
+            cin >> input;
             {
-                vector<int> found = hashtable.locate(query);
-                if (found.empty()) {
-                    cout << "-1\n";
-                }
+                auto results = dictionary.searchBM(input);
+                if (results.empty()) cout << "Слово не найдено (БМ).\n";
                 else {
-                    cout << "Позиции: ";
-                    for (int pos : found)
-                        cout << pos << " ";
+                    cout << "Найдено на позициях (БМ): ";
+                    for (int p : results) cout << p << " ";
                     cout << endl;
                 }
             }
             break;
-
         case 2:
-            cout << "Введите слово для добавления: ";
-            cin >> query;
+            cout << "Введите слово для вставки: ";
+            cin >> input;
+            if (!content.empty() && !isspace(content.back()))
+                content += " ";
+            int pos;
+            pos = content.size();
+            content += input;
+            dictionary.insert(input, pos);
             {
-                if (!document.empty() && !isspace(document.back()))
-                    document += " ";
-                int location = document.size();
-                document += query;
-                hashtable.add(query, location);
-
-                ofstream updateFile("text.txt");
-                updateFile << document;
-                updateFile.close();
-
-                cout << "Слово добавлено в текст на позицию " << location << ".\n";
+                ofstream rewrite("text.txt");
+                rewrite << content;
             }
+            cout << "Слово добавлено на позицию " << pos << endl;
             break;
-
         case 3:
             cout << "Введите слово для удаления: ";
-            cin >> query;
-            if (hashtable.erase(query))
-                cout << "Слово удалено.\n";
+            cin >> input;
+            if (dictionary.erase(input))
+                cout << "Удалено.\n";
             else
-                cout << "Слово не найдено.\n";
+                cout << "Не найдено.\n";
             break;
-
         case 4:
-            hashtable.display();
+            dictionary.showAll();
             break;
-
         case 0:
-            hashtable.saveToDisk("table.txt");
-            cout << "Завершение программы.\n";
+            dictionary.save("table.txt");
+            cout << "Сохранено и выход.\n";
             break;
-
         default:
-            cout << "Неверный выбор. Попробуйте снова.\n";
-            break;
+            cout << "Неверная команда.\n";
         }
-
-    } while (action != 0);
+    } while (cmd != 0);
 
     return 0;
 }
